@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { db } from './firebase'; 
-// 新增 updateDoc 和 doc，用來更新付款狀態
 import { collection, addDoc, onSnapshot, query, orderBy, updateDoc, doc } from 'firebase/firestore';
 
 function App() {
@@ -58,7 +57,7 @@ function App() {
         payer: finalPayer,
         note,
         timestamp: new Date(),
-        isPaid: false // 【新增】預設為未付款
+        isPaid: false // 預設為未付款
       });
 
       // 清空輸入框
@@ -76,12 +75,15 @@ function App() {
     }
   };
 
-  // --- 【新增功能】切換付款狀態 ---
+  // --- 【修改功能】切換付款狀態 (加入鎖定邏輯) ---
   const toggleStatus = async (id, currentStatus) => {
+    // 如果已經付款 (currentStatus 為 true)，就直接結束函式，不做任何事
+    if (currentStatus) return;
+
     try {
       const docRef = doc(db, "expenses", id);
       await updateDoc(docRef, {
-        isPaid: !currentStatus // 把狀態反轉 (true 變 false, false 變 true)
+        isPaid: true // 強制設定為 true，而不是反轉
       });
     } catch (e) {
       console.error("更新狀態失敗:", e);
@@ -92,8 +94,6 @@ function App() {
   // --- 計算總結 ---
   const summary = {};
   transactions.forEach(tx => {
-    // 只統計「未付款」的？或者全部都統計？通常記帳是統計總花費，所以這裡維持統計全部
-    // 如果你只想統計「已付款」的，可以在這裡加 if (tx.isPaid) ...
     summary[tx.payer] = (summary[tx.payer] || 0) + tx.amount;
   });
 
@@ -152,33 +152,33 @@ function App() {
         {transactions.map(tx => (
             <div key={tx.id} style={listItemStyle}>
               
-              {/* 第一行：項目名稱 + (金額 & 按鈕) */}
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                {/* 左上：項目名稱 */}
                 <div style={{ fontSize: '1.2em', fontWeight: 'bold', color: '#333' }}>
                   {tx.item} 
                   {tx.unit && <span style={{ fontSize: '0.8em', color: '#666', marginLeft: '5px', fontWeight: 'normal' }}>({tx.unit})</span>}
                 </div>
 
-                {/* 右上：金額 + 按鈕 */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                   <div style={{ fontWeight: 'bold', color: '#d9534f', fontSize: '1.2em' }}>
                     ${tx.amount}
                   </div>
+                  
+                  {/* --- 修改重點：按鈕 --- */}
                   <button 
                     onClick={() => toggleStatus(tx.id, tx.isPaid)}
+                    disabled={tx.isPaid} // 這裡加上 disabled 屬性，如果是 true 就不能按
                     style={{
                       ...statusButtonStyle,
-                      backgroundColor: tx.isPaid ? '#4CAF50' : '#e0e0e0', // 已付:綠色, 未付:灰色
+                      backgroundColor: tx.isPaid ? '#4CAF50' : '#e0e0e0',
                       color: tx.isPaid ? 'white' : '#555',
+                      cursor: tx.isPaid ? 'default' : 'pointer', // 滑鼠樣式改變：如果是已付款，就不顯示手指
                     }}
                   >
-                    {tx.isPaid ? '已付款' : '未付款'}
+                    {tx.isPaid ? '已付款 ✓' : '未付款'}
                   </button>
                 </div>
               </div>
 
-              {/* 第二行：付款人 + 備註 (移到下面) */}
               <div style={{ fontSize: '0.95em', color: '#666', borderTop: '1px dashed #eee', paddingTop: '8px' }}>
                 付款人: <span style={{ color: '#007bff', fontWeight: 'bold' }}>{tx.payer}</span>
                 {tx.note && <span style={{ marginLeft: '10px', color: '#999' }}>| 備註: {tx.note}</span>}
@@ -219,29 +219,17 @@ function App() {
 // --- 樣式物件 ---
 const inputStyle = { width: '100%', padding: '10px', boxSizing: 'border-box', borderRadius: '5px', border: '1px solid #ccc' };
 const buttonStyle = { width: '100%', padding: '12px', backgroundColor: '#4CAF50', color: 'white', border: 'none', borderRadius: '5px', fontSize: '16px', cursor: 'pointer' };
+const listItemStyle = { backgroundColor: 'white', border: '1px solid #eee', borderRadius: '8px', padding: '15px', marginBottom: '10px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)', display: 'flex', flexDirection: 'column' };
 
-// 列表項目改成直向排列 (因為現在有兩行了)
-const listItemStyle = { 
-  backgroundColor: 'white', 
-  border: '1px solid #eee', 
-  borderRadius: '8px', 
-  padding: '15px', 
-  marginBottom: '10px', 
-  boxShadow: '0 2px 4px rgba(0,0,0,0.05)',
-  display: 'flex',        // 使用 Flexbox
-  flexDirection: 'column' // 設定為垂直排列 (上下兩行)
-};
-
-// 新增按鈕的樣式
 const statusButtonStyle = {
   border: 'none',
   borderRadius: '20px',
   padding: '5px 12px',
   fontSize: '0.8em',
-  cursor: 'pointer',
   transition: 'background 0.3s',
   fontWeight: 'bold',
-  minWidth: '70px'
+  minWidth: '70px',
+  // 注意：這裡移除了 cursor: 'pointer'，改在 JSX 裡面動態控制
 };
 
 export default App;
