@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { db } from './firebase'; 
-import { collection, addDoc, onSnapshot, query, orderBy, updateDoc, doc } from 'firebase/firestore';
-// 【新增】引入 xlsx 套件，用來產生 Excel
+// 【修改點 1】這裡要把 deleteDoc 加回來
+import { collection, addDoc, onSnapshot, query, orderBy, updateDoc, deleteDoc, doc } from 'firebase/firestore';
 import * as XLSX from 'xlsx';
 
 function App() {
@@ -122,60 +122,69 @@ function App() {
     }
   };
 
-  const toggleStatus = async (id, currentStatus) => {
-    if (currentStatus) return;
-    try {
-      const docRef = doc(db, "expenses", id);
-      await updateDoc(docRef, { isPaid: true });
-    } catch (e) {
-      console.error("更新狀態失敗:", e);
-      alert("更新失敗");
+  // --- 【修改點 2】刪除資料功能 ---
+  const handleDelete = async (id, itemName) => {
+    // 雙重確認防止誤刪
+    if (window.confirm(`確定要刪除「${itemName}」這筆資料嗎？`)) {
+      try {
+        await deleteDoc(doc(db, "expenses", id));
+      } catch (e) {
+        console.error("刪除失敗:", e);
+        alert("刪除失敗，請檢查權限");
+      }
     }
   };
 
-  // --- 【新增】匯出 Excel 功能 ---
+  // --- 【修改點 3】切換付款狀態 (加入確認視窗) ---
+  const toggleStatus = async (id, itemName, currentStatus) => {
+    // 1. 如果已經付款，直接擋掉 (鎖定)
+    if (currentStatus) return;
+
+    // 2. 如果是未付款，跳出確認視窗
+    // 只有使用者按「確定 (True)」才會往下執行
+    const isConfirmed = window.confirm(`${itemName} 這項是否付款？`);
+    
+    if (isConfirmed) {
+      try {
+        const docRef = doc(db, "expenses", id);
+        await updateDoc(docRef, { isPaid: true });
+      } catch (e) {
+        console.error("更新狀態失敗:", e);
+        alert("更新失敗");
+      }
+    }
+  };
+
+  // --- 匯出 Excel ---
   const handleExport = () => {
     if (transactions.length === 0) {
       alert("目前沒有資料可以匯出！");
       return;
     }
-
-    // 1. 整理資料：把 Firestore 資料轉成 Excel 每一列的格式
     const dataToExport = sortedTransactions.map(tx => {
       const isIncome = tx.category === '收入';
-      
-      // 處理日期格式 (Firestore Timestamp 轉 JS Date 轉 字串)
       let dateStr = '';
       if (tx.timestamp && tx.timestamp.toDate) {
         dateStr = tx.timestamp.toDate().toLocaleDateString('zh-TW');
       }
-
       return {
         "日期": dateStr,
         "項目": tx.item,
         "分類": tx.category,
-        // 為了讓 Excel好計算，收入存正數，支出存負數
         "金額": isIncome ? tx.amount : -tx.amount, 
         "付款人": tx.payer,
         "備註": tx.note,
         "狀態": tx.isPaid ? "已付款" : "未付款"
       };
     });
-
-    // 2. 建立工作表 (Worksheet)
     const ws = XLSX.utils.json_to_sheet(dataToExport);
-
-    // 3. 建立活頁簿 (Workbook)
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "收支明細");
-
-    // 4. 下載檔案
-    const date = new Date().toISOString().split('T')[0]; // 取得 YYYY-MM-DD
+    const date = new Date().toISOString().split('T')[0]; 
     XLSX.writeFile(wb, `記帳表_${date}.xlsx`);
   };
 
-
-  // --- 計算統計數據 ---
+  // --- 計算統計 ---
   const stats = useMemo(() => {
     let totalIncome = 0;
     let totalExpense = 0;
@@ -183,7 +192,6 @@ function App() {
 
     transactions.forEach(tx => {
       const isIncome = tx.category === '收入';
-      
       if (isIncome) {
         totalIncome += tx.amount;
       } else {
@@ -207,7 +215,6 @@ function App() {
             <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '5px' }}>項目 *</label>
             <input value={item} onChange={e => setItem(e.target.value)} placeholder="例如: 飲料" style={inputStyle} />
           </div>
-          
           <div style={{ flex: 1 }}>
             <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '5px' }}>細項分類 *</label>
             <select value={category} onChange={e => setCategory(e.target.value)} style={inputStyle}>
@@ -248,8 +255,9 @@ function App() {
       </div>
 
       {/* 列表區 */}
+      {/* 【修改點 4】標題改名為「收支明細」 */}
       <h3 style={{ borderBottom: '2px solid #eee', paddingBottom: '10px' }}>
-        📝 支出明細 <span style={{fontSize:'0.6em', color:'#888', fontWeight:'normal'}}>(已依照細項排序)</span>
+        📝 收支明細 <span style={{fontSize:'0.6em', color:'#888', fontWeight:'normal'}}>(已依照細項排序)</span>
       </h3>
       
       <div style={{ marginBottom: '30px' }}>
@@ -281,13 +289,14 @@ function App() {
                     </span>
                   </div>
 
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                    <div style={{ fontWeight: 'bold', color: amountColor, fontSize: '1.2em' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <div style={{ fontWeight: 'bold', color: amountColor, fontSize: '1.2em', marginRight: '5px' }}>
                       {sign} ${tx.amount}
                     </div>
                     
+                    {/* 付款狀態按鈕 */}
                     <button 
-                      onClick={() => toggleStatus(tx.id, tx.isPaid)}
+                      onClick={() => toggleStatus(tx.id, tx.item, tx.isPaid)} // 傳入項目名稱
                       disabled={tx.isPaid}
                       style={{
                         ...statusButtonStyle,
@@ -297,6 +306,28 @@ function App() {
                       }}
                     >
                       {tx.isPaid ? '已付款 ✓' : '未付款'}
+                    </button>
+
+                    {/* 【修改點 5】新增刪除按鈕 */}
+                    <button 
+                      onClick={() => handleDelete(tx.id, tx.item)}
+                      style={{
+                        background: 'none',
+                        border: '1px solid #ddd',
+                        borderRadius: '50%',
+                        width: '24px',
+                        height: '24px',
+                        color: '#999',
+                        cursor: 'pointer',
+                        fontSize: '0.8em',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        marginLeft: '5px'
+                      }}
+                      title="刪除"
+                    >
+                      ✕
                     </button>
                   </div>
                 </div>
@@ -348,7 +379,7 @@ function App() {
         )}
       </div>
 
-      {/* --- 【新增】匯出按鈕 --- */}
+      {/* 匯出按鈕 */}
       <div style={{ textAlign: 'center', marginTop: '20px', marginBottom: '40px' }}>
         <button 
           onClick={handleExport}
