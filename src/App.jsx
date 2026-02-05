@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { db } from './firebase'; 
 import { collection, addDoc, onSnapshot, query, orderBy, updateDoc, doc } from 'firebase/firestore';
+// 【新增】引入 xlsx 套件，用來產生 Excel
+import * as XLSX from 'xlsx';
 
 function App() {
   // --- 狀態管理 ---
@@ -51,14 +53,14 @@ function App() {
     });
   }, [transactions]);
 
-  // --- 4. 【新增】定義分類顏色 ---
+  // --- 4. 分類顏色 ---
   const getCategoryColor = (cat) => {
     switch(cat) {
-      case '收入': return { bg: '#ffcdd2', text: '#b71c1c' }; // 紅色系
-      case '喪葬費': return { bg: '#cfd8dc', text: '#455a64' }; // 灰藍色系 (莊重)
-      case '嘉義支出': return { bg: '#bbdefb', text: '#0d47a1' }; // 藍色系 (地點)
-      case '雜項': return { bg: '#e1bee7', text: '#4a148c' }; // 紫色系 (其他)
-      default: return { bg: '#e0e0e0', text: '#555' };       // 預設灰色
+      case '收入': return { bg: '#ffcdd2', text: '#b71c1c' }; 
+      case '喪葬費': return { bg: '#cfd8dc', text: '#455a64' }; 
+      case '嘉義支出': return { bg: '#bbdefb', text: '#0d47a1' }; 
+      case '雜項': return { bg: '#e1bee7', text: '#4a148c' }; 
+      default: return { bg: '#e0e0e0', text: '#555' };       
     }
   };
 
@@ -131,8 +133,49 @@ function App() {
     }
   };
 
-  // --- 【修改】計算統計數據 ---
-  // 分開計算總收入和總支出
+  // --- 【新增】匯出 Excel 功能 ---
+  const handleExport = () => {
+    if (transactions.length === 0) {
+      alert("目前沒有資料可以匯出！");
+      return;
+    }
+
+    // 1. 整理資料：把 Firestore 資料轉成 Excel 每一列的格式
+    const dataToExport = sortedTransactions.map(tx => {
+      const isIncome = tx.category === '收入';
+      
+      // 處理日期格式 (Firestore Timestamp 轉 JS Date 轉 字串)
+      let dateStr = '';
+      if (tx.timestamp && tx.timestamp.toDate) {
+        dateStr = tx.timestamp.toDate().toLocaleDateString('zh-TW');
+      }
+
+      return {
+        "日期": dateStr,
+        "項目": tx.item,
+        "分類": tx.category,
+        // 為了讓 Excel好計算，收入存正數，支出存負數
+        "金額": isIncome ? tx.amount : -tx.amount, 
+        "付款人": tx.payer,
+        "備註": tx.note,
+        "狀態": tx.isPaid ? "已付款" : "未付款"
+      };
+    });
+
+    // 2. 建立工作表 (Worksheet)
+    const ws = XLSX.utils.json_to_sheet(dataToExport);
+
+    // 3. 建立活頁簿 (Workbook)
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "收支明細");
+
+    // 4. 下載檔案
+    const date = new Date().toISOString().split('T')[0]; // 取得 YYYY-MM-DD
+    XLSX.writeFile(wb, `記帳表_${date}.xlsx`);
+  };
+
+
+  // --- 計算統計數據 ---
   const stats = useMemo(() => {
     let totalIncome = 0;
     let totalExpense = 0;
@@ -146,9 +189,6 @@ function App() {
       } else {
         totalExpense += tx.amount;
       }
-
-      // 依舊統計每個人經手多少錢 (不分收支，純粹紀錄金流)
-      // 如果你希望收入不計入「個人代墊」，可以在這裡加判斷
       payerSummary[tx.payer] = (payerSummary[tx.payer] || 0) + tx.amount;
     });
 
@@ -219,8 +259,6 @@ function App() {
             const isIncome = tx.category === '收入';
             const sign = isIncome ? '+' : '-';          
             const amountColor = isIncome ? '#e53935' : '#4CAF50'; 
-            
-            // 【修改點 1】取得對應的分類顏色
             const tagStyle = getCategoryColor(tx.category);
 
             return (
@@ -229,13 +267,12 @@ function App() {
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                   <div style={{ fontSize: '1.2em', fontWeight: 'bold', color: '#333' }}>
                     {tx.item} 
-                    {/* 分類標籤：套用動態顏色 */}
                     <span style={{ 
                       fontSize: '0.7em', 
                       color: tagStyle.text, 
                       backgroundColor: tagStyle.bg, 
                       padding: '2px 8px', 
-                      borderRadius: '12px', // 稍微圓一點比較好看
+                      borderRadius: '12px',
                       marginLeft: '8px',
                       verticalAlign: 'middle',
                       fontWeight: 'bold'
@@ -274,11 +311,10 @@ function App() {
         })}
       </div>
 
-      {/* --- 【修改點 2 & 3】全新的統計區塊 --- */}
-      <div style={{ backgroundColor: '#333', color: 'white', padding: '20px', borderRadius: '10px' }}>
+      {/* 統計區塊 */}
+      <div style={{ backgroundColor: '#333', color: 'white', padding: '20px', borderRadius: '10px', marginBottom: '20px' }}>
         <h3 style={{ margin: '0 0 15px 0', borderBottom: '1px solid #555', paddingBottom: '10px' }}>📊 總計</h3>
         
-        {/* 個人經手統計 (保留，方便看誰付了錢) */}
         {Object.keys(stats.payerSummary).length === 0 ? (
           <p style={{color: '#aaa', fontStyle:'italic'}}>尚無統計資料</p>
         ) : (
@@ -293,31 +329,43 @@ function App() {
         {Object.keys(stats.payerSummary).length > 0 && (
           <>
             <hr style={{ borderColor: '#555', margin: '15px 0' }}/>
-            
-            {/* 總收入 (紅色) */}
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '1.1em', marginBottom: '5px' }}>
               <span>總收入</span>
               <span style={{ color: '#ef5350', fontWeight: 'bold' }}>+ ${stats.totalIncome}</span>
             </div>
-
-            {/* 總支出 (綠色) */}
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '1.1em', marginBottom: '5px' }}>
               <span>總支出</span>
               <span style={{ color: '#66bb6a', fontWeight: 'bold' }}>- ${stats.totalExpense}</span>
             </div>
-
             <hr style={{ borderColor: '#555', margin: '10px 0' }}/>
-
-            {/* 結餘 (收入 - 支出) */}
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '1.5em', fontWeight: 'bold' }}>
               <span>結餘</span>
-              {/* 如果是正的顯示紅色，負的顯示綠色 (依照你的視覺邏輯) */}
               <span style={{ color: (stats.totalIncome - stats.totalExpense) >= 0 ? '#ef5350' : '#66bb6a' }}>
                 $ {stats.totalIncome - stats.totalExpense}
               </span>
             </div>
           </>
         )}
+      </div>
+
+      {/* --- 【新增】匯出按鈕 --- */}
+      <div style={{ textAlign: 'center', marginTop: '20px', marginBottom: '40px' }}>
+        <button 
+          onClick={handleExport}
+          style={{
+            backgroundColor: '#008CBA',
+            color: 'white',
+            padding: '12px 24px',
+            border: 'none',
+            borderRadius: '5px',
+            fontSize: '1em',
+            cursor: 'pointer',
+            fontWeight: 'bold',
+            boxShadow: '0 4px 6px rgba(0,0,0,0.1)'
+          }}
+        >
+          📥 匯出成 Excel 表格
+        </button>
       </div>
 
     </div>
