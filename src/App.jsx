@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { db } from './firebase'; 
-// 【修改點 1】這裡要把 deleteDoc 加回來
 import { collection, addDoc, onSnapshot, query, orderBy, updateDoc, deleteDoc, doc } from 'firebase/firestore';
 import * as XLSX from 'xlsx';
 
@@ -9,16 +8,20 @@ function App() {
   const [transactions, setTransactions] = useState([]); 
   const [loading, setLoading] = useState(true);
 
-  // 輸入欄位狀態
+  // 輸入欄位狀態 (新增用)
   const [item, setItem] = useState('');       
   const [category, setCategory] = useState(''); 
   const [customCategory, setCustomCategory] = useState(''); 
-
   const [amount, setAmount] = useState('');   
-  
   const [payer, setPayer] = useState('');         
   const [customPayer, setCustomPayer] = useState(''); 
   const [note, setNote] = useState('');       
+
+  // --- 【修改點 1】編輯模式專用的狀態 ---
+  const [editingId, setEditingId] = useState(null); // 目前正在編輯哪一筆 ID
+  const [editForm, setEditForm] = useState({        // 編輯中的暫存資料
+    item: '', category: '', amount: '', payer: '', note: ''
+  });
 
   // --- 1. 付款人名單邏輯 ---
   const allUsers = useMemo(() => {
@@ -39,16 +42,11 @@ function App() {
     return [...transactions].sort((a, b) => {
       const catA = a.category || '';
       const catB = b.category || '';
-
       let indexA = categoryOrder.indexOf(catA);
       let indexB = categoryOrder.indexOf(catB);
-
       if (indexA === -1) indexA = 999;
       if (indexB === -1) indexB = 999;
-
-      if (indexA !== indexB) {
-        return indexA - indexB; 
-      }
+      if (indexA !== indexB) return indexA - indexB; 
       return b.timestamp - a.timestamp; 
     });
   }, [transactions]);
@@ -83,38 +81,17 @@ function App() {
     const finalPayer = (payer === 'NEW_PAYER') ? customPayer.trim() : payer;
     const finalCategory = (category === 'NEW_CATEGORY') ? customCategory.trim() : category;
 
-    if (!item || !amount) {
-      alert("請至少輸入「項目」和「金額」！");
-      return;
-    }
-    if (!finalPayer) {
-      alert("請選擇付款人！");
-      return;
-    }
-    if (!finalCategory) {
-      alert("請選擇細項分類！");
-      return;
-    }
+    if (!item || !amount) { alert("請至少輸入「項目」和「金額」！"); return; }
+    if (!finalPayer) { alert("請選擇付款人！"); return; }
+    if (!finalCategory) { alert("請選擇細項分類！"); return; }
 
     try {
       await addDoc(collection(db, "expenses"), {
-        item,
-        category: finalCategory,
-        amount: parseFloat(amount),
-        payer: finalPayer,
-        note,
-        timestamp: new Date(),
-        isPaid: false 
+        item, category: finalCategory, amount: parseFloat(amount),
+        payer: finalPayer, note, timestamp: new Date(), isPaid: false 
       });
-
-      setItem('');
-      setCategory(''); 
-      setCustomCategory('');
-      setAmount('');
-      setNote('');
-      setCustomPayer(''); 
-      setPayer(''); 
-      
+      setItem(''); setCategory(''); setCustomCategory('');
+      setAmount(''); setNote(''); setCustomPayer(''); setPayer(''); 
       alert("新增成功！");
     } catch (e) {
       console.error("Error adding document: ", e);
@@ -122,45 +99,66 @@ function App() {
     }
   };
 
-  // --- 【修改點 2】刪除資料功能 ---
+  // --- 刪除資料 ---
   const handleDelete = async (id, itemName) => {
-    // 雙重確認防止誤刪
     if (window.confirm(`確定要刪除「${itemName}」這筆資料嗎？`)) {
-      try {
-        await deleteDoc(doc(db, "expenses", id));
-      } catch (e) {
-        console.error("刪除失敗:", e);
-        alert("刪除失敗，請檢查權限");
-      }
+      try { await deleteDoc(doc(db, "expenses", id)); } 
+      catch (e) { console.error("刪除失敗:", e); alert("刪除失敗"); }
     }
   };
 
-  // --- 【修改點 3】切換付款狀態 (加入確認視窗) ---
+  // --- 切換付款狀態 ---
   const toggleStatus = async (id, itemName, currentStatus) => {
-    // 1. 如果已經付款，直接擋掉 (鎖定)
     if (currentStatus) return;
-
-    // 2. 如果是未付款，跳出確認視窗
-    // 只有使用者按「確定 (True)」才會往下執行
     const isConfirmed = window.confirm(`${itemName} 這項是否付款？`);
-    
     if (isConfirmed) {
       try {
         const docRef = doc(db, "expenses", id);
         await updateDoc(docRef, { isPaid: true });
-      } catch (e) {
-        console.error("更新狀態失敗:", e);
-        alert("更新失敗");
-      }
+      } catch (e) { console.error("更新狀態失敗:", e); alert("更新失敗"); }
+    }
+  };
+
+  // --- 【修改點 2】編輯相關功能 ---
+  // A. 開始編輯：把資料填入 input
+  const startEditing = (tx) => {
+    setEditingId(tx.id);
+    setEditForm({
+      item: tx.item,
+      category: tx.category,
+      amount: tx.amount,
+      payer: tx.payer,
+      note: tx.note || ''
+    });
+  };
+
+  // B. 取消編輯
+  const cancelEditing = () => {
+    setEditingId(null);
+    setEditForm({ item: '', category: '', amount: '', payer: '', note: '' });
+  };
+
+  // C. 儲存編輯
+  const saveEdit = async (id) => {
+    try {
+      const docRef = doc(db, "expenses", id);
+      await updateDoc(docRef, {
+        item: editForm.item,
+        category: editForm.category,
+        amount: parseFloat(editForm.amount),
+        payer: editForm.payer,
+        note: editForm.note
+      });
+      setEditingId(null); // 關閉編輯模式
+    } catch (e) {
+      console.error("更新失敗:", e);
+      alert("更新資料失敗");
     }
   };
 
   // --- 匯出 Excel ---
   const handleExport = () => {
-    if (transactions.length === 0) {
-      alert("目前沒有資料可以匯出！");
-      return;
-    }
+    if (transactions.length === 0) { alert("無資料可匯出"); return; }
     const dataToExport = sortedTransactions.map(tx => {
       const isIncome = tx.category === '收入';
       let dateStr = '';
@@ -168,13 +166,9 @@ function App() {
         dateStr = tx.timestamp.toDate().toLocaleDateString('zh-TW');
       }
       return {
-        "日期": dateStr,
-        "項目": tx.item,
-        "分類": tx.category,
+        "日期": dateStr, "項目": tx.item, "分類": tx.category,
         "金額": isIncome ? tx.amount : -tx.amount, 
-        "付款人": tx.payer,
-        "備註": tx.note,
-        "狀態": tx.isPaid ? "已付款" : "未付款"
+        "付款人": tx.payer, "備註": tx.note, "狀態": tx.isPaid ? "已付款" : "未付款"
       };
     });
     const ws = XLSX.utils.json_to_sheet(dataToExport);
@@ -186,20 +180,13 @@ function App() {
 
   // --- 計算統計 ---
   const stats = useMemo(() => {
-    let totalIncome = 0;
-    let totalExpense = 0;
+    let totalIncome = 0, totalExpense = 0;
     const payerSummary = {};
-
     transactions.forEach(tx => {
-      const isIncome = tx.category === '收入';
-      if (isIncome) {
-        totalIncome += tx.amount;
-      } else {
-        totalExpense += tx.amount;
-      }
+      if (tx.category === '收入') totalIncome += tx.amount;
+      else totalExpense += tx.amount;
       payerSummary[tx.payer] = (payerSummary[tx.payer] || 0) + tx.amount;
     });
-
     return { totalIncome, totalExpense, payerSummary };
   }, [transactions]);
 
@@ -210,6 +197,7 @@ function App() {
       
       {/* 輸入區塊 */}
       <div style={{ border: '1px solid #ddd', borderRadius: '10px', padding: '20px', backgroundColor: '#f9f9f9', marginBottom: '25px' }}>
+        {/* ...維持原本的新增介面... */}
         <div style={{ display: 'flex', gap: '10px', marginBottom: '15px' }}>
           <div style={{ flex: 1.5 }}>
             <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '5px' }}>項目 *</label>
@@ -227,7 +215,6 @@ function App() {
             )}
           </div>
         </div>
-
         <div style={{ display: 'flex', gap: '10px', marginBottom: '15px' }}>
           <div style={{ flex: 1 }}>
             <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '5px' }}>金額 ($) *</label>
@@ -245,17 +232,14 @@ function App() {
             )}
           </div>
         </div>
-
         <div style={{ marginBottom: '20px' }}>
           <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '5px' }}>備註</label>
           <input value={note} onChange={e => setNote(e.target.value)} placeholder="補充說明..." style={inputStyle} />
         </div>
-
         <button onClick={handleAdd} style={buttonStyle}>儲存到雲端</button>
       </div>
 
       {/* 列表區 */}
-      {/* 【修改點 4】標題改名為「收支明細」 */}
       <h3 style={{ borderBottom: '2px solid #eee', paddingBottom: '10px' }}>
         📝 收支明細 <span style={{fontSize:'0.6em', color:'#888', fontWeight:'normal'}}>(已依照細項排序)</span>
       </h3>
@@ -264,109 +248,144 @@ function App() {
         {sortedTransactions.length === 0 && !loading && <p style={{color:'#888', textAlign:'center'}}>目前沒有資料，請新增第一筆！</p>}
         
         {sortedTransactions.map(tx => {
-            const isIncome = tx.category === '收入';
-            const sign = isIncome ? '+' : '-';          
-            const amountColor = isIncome ? '#e53935' : '#4CAF50'; 
-            const tagStyle = getCategoryColor(tx.category);
-
-            return (
-              <div key={tx.id} style={listItemStyle}>
-                
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                  <div style={{ fontSize: '1.2em', fontWeight: 'bold', color: '#333' }}>
-                    {tx.item} 
-                    <span style={{ 
-                      fontSize: '0.7em', 
-                      color: tagStyle.text, 
-                      backgroundColor: tagStyle.bg, 
-                      padding: '2px 8px', 
-                      borderRadius: '12px',
-                      marginLeft: '8px',
-                      verticalAlign: 'middle',
-                      fontWeight: 'bold'
-                    }}>
-                      {tx.category}
-                    </span>
+            // 【修改點 3】判斷：如果是編輯中的項目，顯示編輯表單；否則顯示正常卡片
+            if (editingId === tx.id) {
+              // --- 編輯模式 ---
+              return (
+                <div key={tx.id} style={{...listItemStyle, border: '2px solid #4CAF50', backgroundColor: '#f0f8f0'}}>
+                  <div style={{display:'flex', gap:'5px', marginBottom:'5px'}}>
+                    <input 
+                      value={editForm.item} 
+                      onChange={e => setEditForm({...editForm, item: e.target.value})}
+                      placeholder="項目"
+                      style={{...inputStyle, flex: 2}} 
+                    />
+                    <select 
+                      value={editForm.category} 
+                      onChange={e => setEditForm({...editForm, category: e.target.value})}
+                      style={{...inputStyle, flex: 1}}
+                    >
+                      {allCategories.map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
                   </div>
+                  <div style={{display:'flex', gap:'5px', marginBottom:'5px'}}>
+                    <input 
+                      type="number" 
+                      value={editForm.amount} 
+                      onChange={e => setEditForm({...editForm, amount: e.target.value})}
+                      placeholder="金額"
+                      style={{...inputStyle, flex: 1}} 
+                    />
+                     <select 
+                      value={editForm.payer} 
+                      onChange={e => setEditForm({...editForm, payer: e.target.value})}
+                      style={{...inputStyle, flex: 1}}
+                    >
+                      {allUsers.map(u => <option key={u} value={u}>{u}</option>)}
+                    </select>
+                  </div>
+                  <div style={{marginBottom:'10px'}}>
+                     <input 
+                      value={editForm.note} 
+                      onChange={e => setEditForm({...editForm, note: e.target.value})}
+                      placeholder="備註"
+                      style={inputStyle} 
+                    />
+                  </div>
+                  <div style={{display:'flex', gap:'10px', justifyContent:'flex-end'}}>
+                    <button onClick={cancelEditing} style={{...statusButtonStyle, backgroundColor:'#aaa', color:'white'}}>取消</button>
+                    <button onClick={() => saveEdit(tx.id)} style={{...statusButtonStyle, backgroundColor:'#4CAF50', color:'white'}}>儲存修改</button>
+                  </div>
+                </div>
+              );
+            } else {
+              // --- 正常顯示模式 ---
+              const isIncome = tx.category === '收入';
+              const sign = isIncome ? '+' : '-';          
+              const amountColor = isIncome ? '#e53935' : '#4CAF50'; 
+              const tagStyle = getCategoryColor(tx.category);
 
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <div style={{ fontWeight: 'bold', color: amountColor, fontSize: '1.2em', marginRight: '5px' }}>
-                      {sign} ${tx.amount}
+              return (
+                <div key={tx.id} style={listItemStyle}>
+                  
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                    <div style={{ fontSize: '1.2em', fontWeight: 'bold', color: '#333' }}>
+                      {tx.item} 
+                      <span style={{ 
+                        fontSize: '0.7em', color: tagStyle.text, backgroundColor: tagStyle.bg, 
+                        padding: '2px 8px', borderRadius: '12px', marginLeft: '8px', 
+                        verticalAlign: 'middle', fontWeight: 'bold'
+                      }}>
+                        {tx.category}
+                      </span>
                     </div>
-                    
-                    {/* 付款狀態按鈕 */}
-                    <button 
-                      onClick={() => toggleStatus(tx.id, tx.item, tx.isPaid)} // 傳入項目名稱
-                      disabled={tx.isPaid}
-                      style={{
-                        ...statusButtonStyle,
-                        backgroundColor: tx.isPaid ? '#4CAF50' : '#e0e0e0',
-                        color: tx.isPaid ? 'white' : '#555',
-                        cursor: tx.isPaid ? 'default' : 'pointer',
-                      }}
-                    >
-                      {tx.isPaid ? '已付款 ✓' : '未付款'}
-                    </button>
 
-                    {/* 【修改點 5】新增刪除按鈕 */}
-                    <button 
-                      onClick={() => handleDelete(tx.id, tx.item)}
-                      style={{
-                        background: 'none',
-                        border: '1px solid #ddd',
-                        borderRadius: '50%',
-                        width: '24px',
-                        height: '24px',
-                        color: '#999',
-                        cursor: 'pointer',
-                        fontSize: '0.8em',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        marginLeft: '5px'
-                      }}
-                      title="刪除"
-                    >
-                      ✕
-                    </button>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                      <div style={{ fontWeight: 'bold', color: amountColor, fontSize: '1.2em', marginRight: '5px' }}>
+                        {sign} ${tx.amount}
+                      </div>
+                      
+                      {/* 付款狀態 */}
+                      <button 
+                        onClick={() => toggleStatus(tx.id, tx.item, tx.isPaid)}
+                        disabled={tx.isPaid}
+                        style={{
+                          ...statusButtonStyle,
+                          backgroundColor: tx.isPaid ? '#4CAF50' : '#e0e0e0',
+                          color: tx.isPaid ? 'white' : '#555',
+                          cursor: tx.isPaid ? 'default' : 'pointer',
+                        }}
+                      >
+                        {tx.isPaid ? '已付款 ✓' : '未付款'}
+                      </button>
+
+                      {/* 【修改點 4】新增編輯按鈕 */}
+                      <button 
+                        onClick={() => startEditing(tx)}
+                        style={iconButtonStyle}
+                        title="編輯"
+                        disabled={tx.isPaid} // 如果已付款，通常建議鎖定不給編輯，若你想開放編輯，把這行拿掉即可
+                      >
+                        ✎
+                      </button>
+
+                      {/* 刪除按鈕 */}
+                      <button 
+                        onClick={() => handleDelete(tx.id, tx.item)}
+                        style={iconButtonStyle}
+                        title="刪除"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  </div>
+
+                  <div style={{ fontSize: '0.95em', color: '#666', borderTop: '1px dashed #eee', paddingTop: '8px' }}>
+                    付款人: <span style={{ color: '#007bff', fontWeight: 'bold' }}>{tx.payer}</span>
+                    {tx.note && <span style={{ marginLeft: '10px', color: '#999' }}>| 備註: {tx.note}</span>}
                   </div>
                 </div>
-
-                <div style={{ fontSize: '0.95em', color: '#666', borderTop: '1px dashed #eee', paddingTop: '8px' }}>
-                  付款人: <span style={{ color: '#007bff', fontWeight: 'bold' }}>{tx.payer}</span>
-                  {tx.note && <span style={{ marginLeft: '10px', color: '#999' }}>| 備註: {tx.note}</span>}
-                </div>
-
-              </div>
-            );
+              );
+            }
         })}
       </div>
 
-      {/* 統計區塊 */}
+      {/* 統計區塊 (維持原樣) */}
       <div style={{ backgroundColor: '#333', color: 'white', padding: '20px', borderRadius: '10px', marginBottom: '20px' }}>
         <h3 style={{ margin: '0 0 15px 0', borderBottom: '1px solid #555', paddingBottom: '10px' }}>📊 總計</h3>
-        
-        {Object.keys(stats.payerSummary).length === 0 ? (
-          <p style={{color: '#aaa', fontStyle:'italic'}}>尚無統計資料</p>
-        ) : (
-          Object.entries(stats.payerSummary).map(([user, total]) => (
-            <div key={user} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px', fontSize: '0.9em', color: '#ccc' }}>
-              <span>{user} (經手)</span>
-              <span>${total}</span>
-            </div>
-          ))
-        )}
-        
         {Object.keys(stats.payerSummary).length > 0 && (
           <>
+             {Object.entries(stats.payerSummary).map(([user, total]) => (
+                <div key={user} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px', fontSize: '0.9em', color: '#ccc' }}>
+                  <span>{user} (經手)</span><span>${total}</span>
+                </div>
+             ))}
             <hr style={{ borderColor: '#555', margin: '15px 0' }}/>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '1.1em', marginBottom: '5px' }}>
-              <span>總收入</span>
-              <span style={{ color: '#ef5350', fontWeight: 'bold' }}>+ ${stats.totalIncome}</span>
+              <span>總收入</span><span style={{ color: '#ef5350', fontWeight: 'bold' }}>+ ${stats.totalIncome}</span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '1.1em', marginBottom: '5px' }}>
-              <span>總支出</span>
-              <span style={{ color: '#66bb6a', fontWeight: 'bold' }}>- ${stats.totalExpense}</span>
+              <span>總支出</span><span style={{ color: '#66bb6a', fontWeight: 'bold' }}>- ${stats.totalExpense}</span>
             </div>
             <hr style={{ borderColor: '#555', margin: '10px 0' }}/>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '1.5em', fontWeight: 'bold' }}>
@@ -379,26 +398,11 @@ function App() {
         )}
       </div>
 
-      {/* 匯出按鈕 */}
       <div style={{ textAlign: 'center', marginTop: '20px', marginBottom: '40px' }}>
-        <button 
-          onClick={handleExport}
-          style={{
-            backgroundColor: '#008CBA',
-            color: 'white',
-            padding: '12px 24px',
-            border: 'none',
-            borderRadius: '5px',
-            fontSize: '1em',
-            cursor: 'pointer',
-            fontWeight: 'bold',
-            boxShadow: '0 4px 6px rgba(0,0,0,0.1)'
-          }}
-        >
+        <button onClick={handleExport} style={{backgroundColor: '#008CBA', color: 'white', padding: '12px 24px', border: 'none', borderRadius: '5px', fontSize: '1em', cursor: 'pointer', fontWeight: 'bold', boxShadow: '0 4px 6px rgba(0,0,0,0.1)'}}>
           📥 匯出成 Excel 表格
         </button>
       </div>
-
     </div>
   );
 }
@@ -407,15 +411,12 @@ function App() {
 const inputStyle = { width: '100%', padding: '10px', boxSizing: 'border-box', borderRadius: '5px', border: '1px solid #ccc' };
 const buttonStyle = { width: '100%', padding: '12px', backgroundColor: '#4CAF50', color: 'white', border: 'none', borderRadius: '5px', fontSize: '16px', cursor: 'pointer' };
 const listItemStyle = { backgroundColor: 'white', border: '1px solid #eee', borderRadius: '8px', padding: '15px', marginBottom: '10px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)', display: 'flex', flexDirection: 'column' };
+const statusButtonStyle = { border: 'none', borderRadius: '20px', padding: '5px 12px', fontSize: '0.8em', transition: 'background 0.3s', fontWeight: 'bold', minWidth: '70px' };
 
-const statusButtonStyle = {
-  border: 'none',
-  borderRadius: '20px',
-  padding: '5px 12px',
-  fontSize: '0.8em',
-  transition: 'background 0.3s',
-  fontWeight: 'bold',
-  minWidth: '70px',
+// 【新增】編輯和刪除小按鈕的共用樣式
+const iconButtonStyle = {
+  background: 'none', border: '1px solid #ddd', borderRadius: '50%', width: '24px', height: '24px',
+  color: '#555', cursor: 'pointer', fontSize: '0.9em', display: 'flex', alignItems: 'center', justifyContent: 'center', marginLeft: '5px'
 };
 
 export default App;
